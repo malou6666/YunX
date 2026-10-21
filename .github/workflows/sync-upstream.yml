@@ -21,7 +21,7 @@ jobs:
         id: sync
         uses: aormsby/Fork-Sync-With-Upstream-action@v3.4.1
         with:
-          upstream_sync_repo: 原作者用户名/原仓库名 # 例如: torvalds/linux
+          upstream_sync_repo: CYQawa/YunX # 例如: torvalds/linux
           upstream_sync_branch: main                # 上游主分支名（常见为 main 或 master）
           target_sync_branch: main                  # 本地 Fork 需同步的分支名
           target_repo_token: ${{ secrets.GITHUB_TOKEN }} # 使用系统自带 Token 即可

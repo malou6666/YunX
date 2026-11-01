@@ -31,6 +31,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -44,6 +45,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Bookmarks
 import androidx.compose.material.icons.outlined.Campaign
+import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -84,9 +86,12 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -102,6 +107,7 @@ import com.yunx.app.data.download.DownloadPlatform
 import com.yunx.app.data.backup.AuthBackupManager
 import com.yunx.app.data.network.BaiduApi
 import com.yunx.app.data.network.C139Api
+import com.yunx.app.data.network.C139DeviceInfo
 import com.yunx.app.data.network.GitHubApi
 import com.yunx.app.data.network.GitHubLinkParser
 import com.yunx.app.data.network.GitHubTokenStore
@@ -199,6 +205,7 @@ import com.yunx.app.ui.viewmodel.UCAccountViewModel
 import com.yunx.app.ui.viewmodel.XunleiAccountViewModel
 import com.yunx.app.ui.viewmodel.XunleiCloudViewModel
 import com.yunx.app.ui.viewmodel.VideoAccountViewModel
+import com.yunx.app.util.AppLinks
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.map
@@ -260,6 +267,12 @@ fun MainScreen(
     onIncomingAddUrlConsumed: () -> Unit = {}
 ) {
     var currentTab by rememberSaveable { mutableStateOf(MainTab.Resolve) }
+
+    // 账号页顶栏「排序」：弹窗和网盘列表都在 DriveScreen，但入口按钮画在全局顶栏，
+    // 所以开关状态提升到本层（弹窗内容由 DriveScreen 渲染）。
+    var showDriveSort by rememberSaveable { mutableStateOf(false) }
+    // 账号页是否正停在某个网盘的浏览子页：子页打开时隐藏「排序」按钮（它只属于账号列表）
+    var driveSubPageOpen by rememberSaveable { mutableStateOf(false) }
 
     // 实况通知等外部来源请求切 Tab：读一次即消费（清空由调用方做）
     LaunchedEffect(openTab) {
@@ -385,7 +398,10 @@ fun MainScreen(
     val ucApi = remember { UCApi() }
     val xunleiApi = remember { XunleiApi() }
     val baiduApi = remember { BaiduApi() }
-    val c139Api = remember { C139Api() }
+    val appContext = context.applicationContext
+    val c139Api = remember(appContext) {
+        C139Api(deviceInfoProvider = { C139DeviceInfo.from(appContext) })
+    }
     val pan123Api = remember { Pan123Api() }
     val pan115Api = remember { Pan115Api() }
     val guangyaApi = remember { GuangYaApi() }
@@ -1182,6 +1198,17 @@ fun MainScreen(
                                     Icon(Icons.Outlined.Bookmarks, contentDescription = "收藏网盘链接")
                                 }
                             }
+                            // 账号页标题右上角：网盘列表排序 / 隐藏未登录
+                            // ★ 只在账号列表上显示：进了某个网盘的浏览子页时排序没有意义，
+                            //   由 DriveScreen 通过 onSubPageChange 通知本层隐藏。
+                            if (currentTab == MainTab.Drive && !driveSubPageOpen) {
+                                IconButton(onClick = { showDriveSort = true }) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.SwapVert,
+                                        contentDescription = "排序网盘"
+                                    )
+                                }
+                            }
                         },
                         scrollBehavior = scrollBehavior,
                         // 柔性顶栏没有专用的 largeTopAppBarColors，用通用 topAppBarColors（同为 TopAppBarColors 类型）
@@ -1359,7 +1386,11 @@ fun MainScreen(
                                     onVideoRemove = { id -> videoAccountViewModel.remove(id) },
                                     onVideoRemoveAll = { platform ->
                                         videoAccountViewModel.removeAll(platform)
-                                    }
+                                    },
+                                    // 顶栏「排序」入口：弹窗、顺序与隐藏开关都由 DriveScreen 渲染
+                                    showSortDialog = showDriveSort,
+                                    onDismissSortDialog = { showDriveSort = false },
+                                    onSubPageChange = { driveSubPageOpen = it }
                                 )
                                 MainTab.Download -> DownloadScreen(
                                     scrollBehavior,
@@ -1634,6 +1665,23 @@ fun MainScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    // 那四步是让人在电脑上手翻路径，手机上翻不动 —— 直接给一个跳到预填好权限的表单的入口
+                    TextButton(
+                        onClick = {
+                            // 与设置页「GitHub 仓库」同一口径：没有可用浏览器就复制链接，不静默失败
+                            if (!AppLinks.openGitHubTokenPage(context)) {
+                                copyToClipboard(context, AppLinks.GITHUB_TOKEN_PAGE)
+                                SnackbarController.show("未找到可用浏览器，链接已复制")
+                            }
+                        },
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Text(
+                            text = "↗ 从 GitHub 获取 Token",
+                            style = MaterialTheme.typography.bodySmall,
+                            textDecoration = TextDecoration.Underline
+                        )
+                    }
                     Spacer(Modifier.height(8.dp))
                     Text(
                         text = "安全提示：仅给最小权限，勿勾选删除/管理类权限；Token 不明文保存、不上传，清除只需清空后保存。",
@@ -1723,6 +1771,12 @@ fun MainScreen(
     }
 }
 
+
+/** 复制文本到剪贴板（写剪贴板不受「自动识别剪贴板」开关约束，见 Agent.md §3.22） */
+private fun copyToClipboard(context: Context, text: String) {
+    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    cm.setPrimaryClip(ClipData.newPlainText("yunx_link", text))
+}
 
 /**
  * 叠加页容器（关于云析 / 支持开发 / 主题与外观 / 收藏）：整屏 + 不透明底色 + 可选的 sharedBounds 形变。
